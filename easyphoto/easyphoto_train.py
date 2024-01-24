@@ -1,28 +1,34 @@
-
 import os
 import platform
 import subprocess
 import sys
 from glob import glob
-
-from easyphoto.easyphoto_config import (cache_log_file_path, models_path,
+from easyphoto.train_kohya.utils.lora_utils import convert_lora_to_safetensors
+from PIL import Image, ImageOps
+from easyphoto.easyphoto_config import (cache_log_file_path,
+                                        models_path,
                                         user_id_outpath_samples,
                                         validation_prompt)
 from easyphoto.easyphoto_utils import (check_files_exists_and_download,
                                        check_id_valid)
-from easyphoto.train_kohya.utils.lora_utils import convert_lora_to_safetensors
-from PIL import Image, ImageOps
 
 python_executable_path = sys.executable
-check_hash             = True
+check_hash = True
+
 
 # Attention! Output of js is str or list, not float or int
 def easyphoto_train_forward(
     sd_model_checkpoint: str,
     id_task: str,
     user_id: str,
-    resolution: int, val_and_checkpointing_steps: int, max_train_steps: int, steps_per_photos: int,
-    train_batch_size: int, gradient_accumulation_steps: int, dataloader_num_workers: int, learning_rate: float, 
+    resolution: int,
+    val_and_checkpointing_steps: int,
+    max_train_steps: int,
+    steps_per_photos: int,
+    train_batch_size: int,
+    gradient_accumulation_steps: int,
+    dataloader_num_workers: int,
+    learning_rate: float,
     rank: int, network_alpha: int,
     validation: bool,
     instance_images: list,
@@ -35,31 +41,37 @@ def easyphoto_train_forward(
 
     if user_id == "" or user_id is None:
         return "User id cannot be set to empty."
-    if user_id == "none" :
+    if user_id == "none":
         return "User id cannot be set to none."
     
     ids = []
     if os.path.exists(user_id_outpath_samples):
+        # 获取指定目录中的所有文件和子目录的名称
         _ids = os.listdir(user_id_outpath_samples)
         for _id in _ids:
             if check_id_valid(_id, user_id_outpath_samples, models_path):
                 ids.append(_id)
     ids = sorted(ids)
+    print(f"ids: {len(ids)}")
 
     if user_id in ids:
         return "User id 不能重复。"
 
+    # 创建新的用户文件夹
     check_files_exists_and_download(check_hash)
     check_hash = False
+    return
     
     # training templates path
     training_templates_path = os.path.join(models_path, "training_templates")
     # origin image copy
+    # 初始图像
     original_backup_path    = os.path.join(user_id_outpath_samples, user_id, "original_backup")
     # ref image copy
     ref_image_path          = os.path.join(user_id_outpath_samples, user_id, "ref_image.jpg")
 
     # training data save path
+    # 处理过后的图像
     user_path               = os.path.join(user_id_outpath_samples, user_id, "processed_images")
     images_save_path        = os.path.join(user_id_outpath_samples, user_id, "processed_images", "train")
     json_save_path          = os.path.join(user_id_outpath_samples, user_id, "processed_images", "metadata.jsonl")
@@ -83,6 +95,8 @@ def easyphoto_train_forward(
         image = Image.open(user_image['name'])
         image = ImageOps.exif_transpose(image).convert("RGB")
         image.save(os.path.join(original_backup_path, str(index) + ".jpg"))
+
+    # TODO: 传输到 s3 桶中
         
     # preprocess
     preprocess_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preprocess.py")
@@ -95,6 +109,7 @@ def easyphoto_train_forward(
             f'--ref_image_path={ref_image_path}'
         ]
     try:
+        # 开始进行数据预处理
         subprocess.run(command, check=True)
     except subprocess.CalledProcessError as e:
         print(f"Error executing the command: {e}")
@@ -297,3 +312,6 @@ def easyphoto_train_forward(
         convert_lora_to_safetensors(ddpo_lora_path, ddpo_webui_save_path)
 
     return "The training has been completed."
+
+if __name__ == "__main__":
+    print(python_executable_path)   #D:\codes\EasyPhoto\venv\Scripts\python.exe

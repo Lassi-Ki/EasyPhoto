@@ -33,3 +33,4 @@ diffusers==0.18.2
 controlnet_aux==0.0.6
 modelscope==1.9.1
 tensorflow-cpu==2.13.0
+boto3==1.34.17

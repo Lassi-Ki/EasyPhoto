@@ -1,0 +1,84 @@
+import boto3
+import torch
+import os
+import hashlib
+from PIL import Image
+from easyphoto.easyphoto_train import easyphoto_train_forward
+
+
+def open_image(image_path):
+    image = Image.open(image_path)
+    return image
+
+def train(datas: dict):
+    user_id = datas.get("user_id", "tmp")
+    images_s3_path = datas.get("images_s3_path", "")
+    """------------------------------- 固定参数 -----------------------------------------------------------------------"""
+    sd_model_checkpoint = datas.get("sd_model_checkpoint", "sd_xl_base_1.0.safetensors")
+    resolution = datas.get("resolution", 1024)
+    val_and_checkpointing_steps = datas.get("val_and_checkpointing_steps", 100)
+    max_train_steps = datas.get("max_train_steps", 600)
+    steps_per_photos = datas.get("steps_per_photos", 200)
+    train_batch_size = datas.get("train_batch_size", 1)
+    gradient_accumulation_steps = datas.get("gradient_accumulation_steps", 4)
+    dataloader_num_workers = datas.get("dataloader_num_workers", 16)
+    learning_rate = datas.get("learning_rate", 1e-4)
+    rank = datas.get("rank", 32)
+    network_alpha = datas.get("network_alpha", 16)
+    validation = datas.get("validation", False)
+    enable_rl = datas.get("enable_rl", False)
+    max_rl_time = datas.get("max_rl_time", 1)
+    timestep_fraction = datas.get("timestep_fraction", 1)
+    id_task = datas.get("id_task", "")
+    args = datas.get("args", [])
+
+    # TODO: 处理图片, 首先根据给定的S3地址从S3桶中将数据集下载到data文件夹下
+
+    current_directory = os.getcwd()
+    folder_path = current_directory + '/data'
+    folder_tmp_path = current_directory + '/tmp'
+    files = [os.path.join(folder_path, file) for file in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, file))]
+    instance_images = [open_image(file) for file in files]
+    _instance_images = []
+
+    for instance_image in instance_images:
+        hash_value = hashlib.md5(instance_image.tobytes()).hexdigest()
+        save_path = os.path.join(folder_tmp_path, hash_value + '.jpg')
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        instance_image_rgb = instance_image.convert("RGB")
+        instance_image_rgb.save(save_path)
+        _instance_images.append({"name": save_path})
+
+    # 图像第一次处理之后储存的地址
+    instance_images = _instance_images
+
+    try:
+        message = easyphoto_train_forward(
+            sd_model_checkpoint,
+            id_task,
+            user_id,
+            resolution,
+            val_and_checkpointing_steps,
+            max_train_steps,
+            steps_per_photos,
+            train_batch_size,
+            gradient_accumulation_steps,
+            dataloader_num_workers,
+            learning_rate,
+            rank,
+            network_alpha,
+            validation,
+            instance_images,
+            enable_rl,
+            max_rl_time,
+            timestep_fraction,
+            *args
+        )
+    except Exception as e:
+        torch.cuda.empty_cache()
+        message = f"Train error, error info:{str(e)}"
+    return {"message": message}
+
+
+if __name__ == "__main__":
+    train({})

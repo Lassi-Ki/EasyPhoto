@@ -2,7 +2,6 @@ import logging
 import os
 import time
 import hashlib
-import gradio as gr
 import requests
 from modelscope import snapshot_download
 from easyphoto.easyphoto_config import data_path, models_path, script_path
@@ -31,6 +30,7 @@ def check_id_valid(user_id, user_id_outpath_samples, models_path):
         return False
     return True
 
+
 def urldownload_progressbar(url, filepath):
     start = time.time() 
     response = requests.get(url, stream=True)
@@ -50,6 +50,8 @@ def urldownload_progressbar(url, filepath):
     except:
         print('Error!')
 
+
+# TODO: 将所有需要下载的文件放入S3桶中，后续通过S3桶进行下载
 def check_files_exists_and_download(check_hash):
     snapshot_download('bubbliiiing/controlnet_helper', cache_dir=os.path.join(models_path, "Others"), revision='v2.3')
 
@@ -84,7 +86,8 @@ def check_files_exists_and_download(check_hash):
         print(f"Start Downloading: {url}")
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         urldownload_progressbar(url, filename)
-       
+
+
 # Calculate the hash value of the download link and downloaded_file by sha256
 def compare_hasd_link_file(url, file_path):
     r           = requests.head(url)
@@ -116,7 +119,6 @@ def compare_hasd_link_file(url, file_path):
         print(f" {file_path} : Hash mismatch")
         return False
 
-_gradio_template_response_orig = gr.routes.templates.TemplateResponse
 
 def webpath(fn):
     if fn.startswith(script_path):
@@ -142,23 +144,3 @@ def css_html():
         head += stylesheet(os.path.join(data_path, "user.css"))
 
     return head
-
-def reload_javascript():
-    scripts_list = [os.path.join(script_path, i) for i in os.listdir(script_path) if i.endswith(".js")]
-    javascript = ""
- 
-    for path in scripts_list:
-        with open(path, "r", encoding="utf8") as js_file:
-            javascript += f"\n<script>{js_file.read()}</script>"
-
-    css = css_html()
-
-    def template_response(*args, **kwargs):
-        res = _gradio_template_response_orig(*args, **kwargs)
-        res.body = res.body.replace(
-            b'</head>', f'{javascript}</head>'.encode("utf8"))
-        res.body = res.body.replace(b'</body>', f'{css}</body>'.encode("utf8"))
-        res.init_headers()
-        return res
- 
-    gr.routes.templates.TemplateResponse = template_response
