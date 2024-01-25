@@ -30,8 +30,8 @@ DEFAULT_NEGATIVE_XL = 'nfsw, bokeh, cgi, illustration, cartoon, deformed, distor
 SDXL_MODEL_NAME = 'sd_xl_base_1.0.safetensors'
 
 # S3
-AWS_ACCESS_KEY_ID = 'AKIAQFIL7R6JDL56WHXD'
-AWS_SECRET_ACCESS_KEY = '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'
+AWS_ACCESS_KEY_ID = ''
+AWS_SECRET_ACCESS_KEY = ''
 AWS_REGION = 'us-west-2'
 AWS_S3_BUCKET_NAME = 'sagemaker-us-west-2-011299426194'
 
