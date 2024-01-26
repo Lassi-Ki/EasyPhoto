@@ -60,7 +60,6 @@ def easyphoto_train_forward(
     # 创建新的用户文件夹
     check_files_exists_and_download(check_hash)
     check_hash = False
-    return
     
     # training templates path
     training_templates_path = os.path.join(models_path, "training_templates")
@@ -91,13 +90,13 @@ def easyphoto_train_forward(
 
     max_train_steps         = int(min(len(instance_images) * int(steps_per_photos), int(max_train_steps)))
 
+    print("max_train_steps: ", max_train_steps)
+
     for index, user_image in enumerate(instance_images):
         image = Image.open(user_image['name'])
         image = ImageOps.exif_transpose(image).convert("RGB")
         image.save(os.path.join(original_backup_path, str(index) + ".jpg"))
 
-    # TODO: 传输到 s3 桶中
-        
     # preprocess
     preprocess_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preprocess.py")
     command = [
