@@ -52,6 +52,7 @@ def train(datas: dict):
     max_rl_time = datas.get("max_rl_time", 1)
     timestep_fraction = datas.get("timestep_fraction", 1)
     id_task = datas.get("id_task", "")
+    skin_retouching_bool = datas.get("skin_retouching_bool", True)
     args = datas.get("args", [])
 
     current_directory = os.getcwd()
@@ -97,14 +98,10 @@ def train(datas: dict):
             enable_rl,
             max_rl_time,
             timestep_fraction,
+            skin_retouching_bool,
             *args
         )
     except Exception as e:
         torch.cuda.empty_cache()
         message = f"Train error, error info:{str(e)}"
     return {"message": message}
-
-
-if __name__ == "__main__":
-    #train({})
-    download_from_s3(AWS_S3_BUCKET_NAME)

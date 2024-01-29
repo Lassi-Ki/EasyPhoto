@@ -5,6 +5,36 @@ import hashlib
 import requests
 from modelscope import snapshot_download
 from easyphoto.easyphoto_config import data_path, models_path, script_path
+import easyphoto
+import torch
+import gc
+
+download_urls = {
+    # The models are from civitai/6424 & civitai/118913, we saved them to oss for your convenience in downloading the models.
+    "sdxl": [
+        # sdxl
+        "https://pai-aigc-photog.oss-cn-hangzhou.aliyuncs.com/webui/diffusers_xl_canny_mid.safetensors",
+        "https://pai-aigc-photog.oss-cn-hangzhou.aliyuncs.com/webui/thibaud_xl_openpose_256lora.safetensors",
+        "https://pai-aigc-photog.oss-cn-hangzhou.aliyuncs.com/webui/madebyollin_sdxl_vae_fp16_fix/diffusion_pytorch_model.safetensors",
+        "https://pai-aigc-photog.oss-cn-hangzhou.aliyuncs.com/webui/madebyollin-sdxl-vae-fp16-fix.safetensors",
+    ],
+}
+
+save_filenames = {
+    # The models are from civitai/6424 & civitai/118913, we saved them to oss for your convenience in downloading the models.
+    "sdxl": [
+        [
+            os.path.join(models_path, f"ControlNet/diffusers_xl_canny_mid.safetensors"),
+            os.path.join(controlnet_cache_path, f"models/diffusers_xl_canny_mid.safetensors"),
+        ],
+        [
+            os.path.join(models_path, f"ControlNet/thibaud_xl_openpose_256lora.safetensors"),
+            os.path.join(controlnet_cache_path, f"models/thibaud_xl_openpose_256lora.safetensors"),
+        ],
+        os.path.join(models_path, "stable-diffusion-xl/madebyollin_sdxl_vae_fp16_fix/diffusion_pytorch_model.safetensors"),
+        os.path.join(models_path, f"VAE/madebyollin-sdxl-vae-fp16-fix.safetensors"),
+    ],
+}
 
 # Set the level of the logger
 log_level = os.environ.get('LOG_LEVEL', 'INFO')
@@ -52,40 +82,28 @@ def urldownload_progressbar(url, filepath):
 
 
 # TODO: 将所有需要下载的文件放入S3桶中，后续通过S3桶进行下载
-def check_files_exists_and_download(check_hash):
-    snapshot_download('bubbliiiing/controlnet_helper', cache_dir=os.path.join(models_path, "Others"), revision='v2.3')
-
-    urls = [
-        "https://pai-aigc-photog.oss-cn-hangzhou.aliyuncs.com/webui/ChilloutMix-ni-fp16.safetensors", 
-        "https://pai-aigc-photog.oss-cn-hangzhou.aliyuncs.com/webui/SDXL_1.0_ArienMixXL_v2.0.safetensors",
-        "https://pai-aigc-photog.oss-cn-hangzhou.aliyuncs.com/webui/FilmVelvia3.safetensors",
-        "https://pai-aigc-photog.oss-cn-hangzhou.aliyuncs.com/webui/face_skin.pth",
-        "https://pai-aigc-photog.oss-cn-hangzhou.aliyuncs.com/webui/1.jpg",
-        "https://pai-aigc-photog.oss-cn-hangzhou.aliyuncs.com/webui/2.jpg",
-        "https://pai-aigc-photog.oss-cn-hangzhou.aliyuncs.com/webui/3.jpg",
-        "https://pai-aigc-photog.oss-cn-hangzhou.aliyuncs.com/webui/4.jpg",
-    ]
-    filenames = [
-        os.path.join(models_path, f"Stable-diffusion/Chilloutmix-Ni-pruned-fp16-fix.safetensors"),
-        os.path.join(models_path, f"Stable-diffusion/SDXL_1.0_ArienMixXL_v2.0.safetensors"),
-        os.path.join(models_path, f"Lora/FilmVelvia3.safetensors"),
-        os.path.join(models_path, "Others", "face_skin.pth"),
-        os.path.join(models_path, "training_templates", "1.jpg"),
-        os.path.join(models_path, "training_templates", "2.jpg"),
-        os.path.join(models_path, "training_templates", "3.jpg"),
-        os.path.join(models_path, "training_templates", "4.jpg"),
-    ]
-    print("Start Downloading weights")
+def check_files_exists_and_download(check_hash, download_mode="base"):
+    urls, filenames = download_urls[download_mode], save_filenames[download_mode]
     for url, filename in zip(urls, filenames):
-        if not check_hash:
-            if os.path.exists(filename):
-                continue
-        else:
-            if os.path.exists(filename) and compare_hasd_link_file(url, filename):
-                continue
+        if type(filename) is str:
+            filename = [filename]
+
+        exist_flag = False
+        for _filename in filename:
+            if not check_hash:
+                if os.path.exists(_filename):
+                    exist_flag = True
+                    break
+            else:
+                if os.path.exists(_filename):
+                    exist_flag = True
+                    break
+        if exist_flag:
+            continue
+
         print(f"Start Downloading: {url}")
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        urldownload_progressbar(url, filename)
+        os.makedirs(os.path.dirname(filename[0]), exist_ok=True)
+        urldownload_progressbar(url, filename[0])
 
 
 # Calculate the hash value of the download link and downloaded_file by sha256
@@ -144,3 +162,17 @@ def css_html():
         head += stylesheet(os.path.join(data_path, "user.css"))
 
     return head
+
+def unload_models():
+    """Unload models to free VRAM."""
+    easyphoto.easyphoto_infer.retinaface_detection = None
+    easyphoto.easyphoto_infer.image_face_fusion = None
+    easyphoto.easyphoto_infer.skin_retouching = None
+    easyphoto.easyphoto_infer.portrait_enhancement = None
+    easyphoto.easyphoto_infer.face_skin = None
+    easyphoto.easyphoto_infer.face_recognition = None
+    easyphoto.easyphoto_infer.psgan_inference = None
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.ipc_collect()
+    return "Already Empty Cache of Preprocess Model in EasyPhoto"
