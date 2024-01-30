@@ -23,7 +23,8 @@ if __name__ == "__main__":
         payload = {}
         sagemaker_serve.train(payload)
     elif cmd_opts.inference:
-        pass
+        payload = {}
+        sagemaker_serve.inference(payload)
     else:
         pass
 
