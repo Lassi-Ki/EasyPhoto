@@ -35,7 +35,7 @@ def download_from_s3(bucket_name, s3_folder, local_folder):
 def train(datas: dict):
     user_id = datas.get("user_id", "tmp")
     images_s3_path = datas.get("images_s3_path", "")
-    """------------------------------- 固定参数 -----------------------------------------------------------------------"""
+    """------------------------------- 固定参数 ---------------------------------------"""
     sd_model_checkpoint = datas.get("sd_model_checkpoint", "sd_xl_base_1.0.safetensors")
     resolution = datas.get("resolution", 1024)
     val_and_checkpointing_steps = datas.get("val_and_checkpointing_steps", 100)
@@ -74,8 +74,6 @@ def train(datas: dict):
         instance_image_rgb = instance_image.convert("RGB")
         instance_image_rgb.save(save_path)
         _instance_images.append({"name": save_path})
-
-    # 图像第一次处理之后储存的地址
     instance_images = _instance_images
 
     try:
