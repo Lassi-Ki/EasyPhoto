@@ -167,6 +167,7 @@ def inference(datas: dict):
 
     tabs = int(tabs)
     try:
+        print("Working...")
         comment, outputs, face_id_outputs = easyphoto_infer_forward(
             sd_model_checkpoint, selected_template_images, init_image, uploaded_template_images, additional_prompt, \
             before_face_fusion_ratio, after_face_fusion_ratio, first_diffusion_steps, first_denoising_strength,
@@ -176,6 +177,7 @@ def inference(datas: dict):
             background_restore_denoising_strength, sd_xl_input_prompt, sd_xl_resolution, tabs, *user_ids
         )
         # outputs = [encode_pil_to_base64(output) for output in outputs]
+        print("Comment: ", comment)
     except Exception as e:
         torch.cuda.empty_cache()
         comment = f"Infer error, error info:{str(e)}"

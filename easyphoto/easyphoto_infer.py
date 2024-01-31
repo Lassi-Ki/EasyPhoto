@@ -149,12 +149,11 @@ def inpaint(
     sd_model_checkpoint = "Chilloutmix-Ni-pruned-fp16-fix.safetensors",
 ):
     assert input_image is not None, f'input_image must not be none'
-    controlnet_units_list           = []
-    controlnet_image                = []
-    controlnet_conditioning_scale   = []
+    controlnet_units_list = []
+    controlnet_image = []
+    controlnet_conditioning_scale = []
     w = int(input_image.width)
     h = int(input_image.height)
-
 
     for index, pair in enumerate(controlnet_pairs):
         controlnet_units_list.append(
@@ -203,6 +202,9 @@ face_skin = None
 face_recognition = None
 check_hash = True
 
+psgan_inference = None
+sdxl_txt2img_flag = False
+
 def easyphoto_infer_forward(
     sd_model_checkpoint, selected_template_images, init_image, uploaded_template_images, additional_prompt, \
     before_face_fusion_ratio, after_face_fusion_ratio, first_diffusion_steps, first_denoising_strength, second_diffusion_steps, second_denoising_strength, \
@@ -220,7 +222,8 @@ def easyphoto_infer_forward(
         if user_id != "none":
             if not check_id_valid(user_id, user_id_outpath_samples, models_path):
                 return "User id is not exist", [], []  
-    
+
+    print("user_id: ", user_id)
     # update do not delete but use "none" as placeholder and will pass this face inpaint later
     passed_userid_list = []
     for idx, user_id in enumerate(user_ids):
@@ -552,8 +555,19 @@ def easyphoto_infer_forward(
                 
                 # First diffusion, facial reconstruction
                 logging.info("Start First diffusion.")
-                controlnet_pairs = [["canny", input_image, 0.50], ["openpose", replaced_input_image, 0.50], ["color", input_image, 0.85]]
-                first_diffusion_output_image = inpaint(input_image, input_mask, controlnet_pairs, diffusion_steps=first_diffusion_steps, denoising_strength=first_denoising_strength, input_prompt=input_prompts[index], hr_scale=1.0, seed=str(seed), sd_model_checkpoint=sd_model_checkpoint, sd_lora_checkpoint=sd_lora_checkpoints[index])
+                controlnet_pairs = [["canny", input_image, 0.50],
+                                    ["openpose", replaced_input_image, 0.50],
+                                    ["color", input_image, 0.85]]
+                first_diffusion_output_image = inpaint(input_image,
+                                                       input_mask,
+                                                       controlnet_pairs,
+                                                       diffusion_steps=first_diffusion_steps,
+                                                       denoising_strength=first_denoising_strength,
+                                                       input_prompt=input_prompts[index],
+                                                       hr_scale=1.0,
+                                                       seed=str(seed),
+                                                       sd_model_checkpoint=sd_model_checkpoint,
+                                                       sd_lora_checkpoint=sd_lora_checkpoints[index])
 
                 if color_shift_middle:
                     # apply color shift

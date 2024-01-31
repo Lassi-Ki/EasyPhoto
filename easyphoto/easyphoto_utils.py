@@ -54,7 +54,7 @@ def check_id_valid(user_id, user_id_outpath_samples, models_path):
     if not os.path.exists(face_id_image_path):
         return False
     
-    safetensors_lora_path   = os.path.join(user_id_outpath_samples, user_id, "user_weights", "best_outputs", f"{user_id}.safetensors") 
+    safetensors_lora_path = os.path.join(user_id_outpath_samples, user_id, "user_weights", "pytorch_lora_weights.safetensors")
     print(safetensors_lora_path)
     if not os.path.exists(safetensors_lora_path):
         return False
