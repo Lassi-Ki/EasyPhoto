@@ -86,7 +86,40 @@ def get_controlnet_preprocess(unit, input_image):
     return output_image
 
 
-def get_controlnet_unit(
+def get_controlnet_unit(unit):
+    global model_canny, model_openpose, model_tile, model_color
+    if unit == "canny":
+        if model_canny is None:
+            model_canny = ControlNetModel.from_pretrained(
+                os.path.join(abs_models_path, "Others", "bubbliiiing/controlnet_helper/controlnet",
+                             "sd-controlnet-canny"), torch_dtype=weight_dtype)
+        return model_canny
+
+    elif unit == "openpose":
+        if model_openpose is None:
+            model_openpose = ControlNetModel.from_pretrained(
+                os.path.join(abs_models_path, "Others", "bubbliiiing/controlnet_helper/controlnet",
+                             "sd-controlnet-openpose"), torch_dtype=weight_dtype)
+        return model_openpose
+
+    elif unit == "color":
+        if model_color is None:
+            model_color = ControlNetModel.from_pretrained(
+                os.path.join(abs_models_path, "Others", "bubbliiiing/controlnet_helper/controlnet",
+                             "sd-controlnet-color"), torch_dtype=weight_dtype)
+        return model_color
+
+    elif unit == "tile":
+        if model_tile is None:
+            model_tile = ControlNetModel.from_pretrained(
+                os.path.join(abs_models_path, "Others", "bubbliiiing/controlnet_helper/controlnet",
+                             "sd-controlnet-tile"), torch_dtype=weight_dtype)
+        return model_tile
+
+    return None
+
+
+def get_controlnet_unit_old(
     unit: str, input_image: Union[Any, List[Any]], weight: float, is_batch: bool = False, control_mode: int = 1
 ):  # Any should be replaced with a more specific image type  # Default to False, assuming single image input by default
     if unit == "canny":
@@ -330,6 +363,67 @@ def inpaint(
     input_image: Image.Image,
     select_mask_input: Image.Image,
     controlnet_pairs: list,
+    input_prompt='1girl',
+    diffusion_steps=50,
+    denoising_strength=0.45,
+    hr_scale: float = 1.0,
+    default_positive_prompt=DEFAULT_POSITIVE,
+    default_negative_prompt=DEFAULT_NEGATIVE,
+    seed: int = 123456,
+    sd_lora_checkpoint=[],
+    sd_model_checkpoint="Chilloutmix-Ni-pruned-fp16-fix.safetensors",
+):
+    assert input_image is not None, f'input_image must not be none'
+    controlnet_units_list = []
+    controlnet_image = []
+    controlnet_conditioning_scale = []
+    w = int(input_image.width)
+    h = int(input_image.height)
+
+    for index, pair in enumerate(controlnet_pairs):
+        controlnet_units_list.append(
+            get_controlnet_unit(pair[0])
+        )
+        controlnet_image.append(
+            get_controlnet_preprocess(pair[0], pair[1])
+        )
+        controlnet_conditioning_scale.append(
+            pair[2]
+        )
+
+    positive = f'{input_prompt}, {default_positive_prompt}'
+    negative = f'{default_negative_prompt}'
+
+    image = i2i_inpaint_call(
+        images=[input_image],
+        mask_image=select_mask_input,
+        denoising_strength=denoising_strength,
+
+        controlnet_units_list=controlnet_units_list,
+        controlnet_image=controlnet_image,
+        controlnet_conditioning_scale=controlnet_conditioning_scale,
+
+        steps=diffusion_steps,
+        seed=seed,
+
+        cfg_scale=7,
+        width=int(w*hr_scale),
+        height=int(h*hr_scale),
+
+        prompt=positive,
+        negative_prompt=negative,
+        sd_lora_checkpoint=sd_lora_checkpoint,
+        sd_model_checkpoint=sd_model_checkpoint,
+        sd_base15_checkpoint=os.path.join(models_path, "Others", "stable-diffusion-v1-5")
+    )
+
+    return image
+
+
+def inpaint_old(
+    input_image: Image.Image,
+    select_mask_input: Image.Image,
+    controlnet_pairs: list,
     input_prompt = '1girl',
     diffusion_steps = 50,
     denoising_strength = 0.45,
@@ -340,15 +434,6 @@ def inpaint(
     seed: int = 123456,
     sd_lora_checkpoint = [],
     sd_model_checkpoint = "Chilloutmix-Ni-pruned-fp16-fix.safetensors",
-    sampler="DPM++ 2M SDE Karras",
-    outpath_samples=easyphoto_img2img_samples,
-    do_not_save_samples=False,
-    animatediff_flag=False,
-    animatediff_video_length=0,
-    animatediff_fps=0,
-    animatediff_reserve_scale=1,
-    animatediff_last_image=None,
-    loractl_flag=False,
 ):
     assert input_image is not None, f'input_image must not be none'
     controlnet_units_list = []
@@ -582,6 +667,7 @@ def easyphoto_infer_forward(
                                                user_id,
                                                "user_weights",
                                                "pytorch_lora_weights.safetensors")]
+            print("sd_lora_checkpoint: ", sd_lora_checkpoint)
 
             face_id_image = Image.open(face_id_image_path).convert("RGB")
             roop_image = Image.open(roop_image_path).convert("RGB")
@@ -847,24 +933,33 @@ def easyphoto_infer_forward(
                 
                 # First diffusion, facial reconstruction
                 logging.info("Start First diffusion.")
-                controlnet_pairs = [["sdxl_canny_mid", input_image, 0.50]]
-                # controlnet_pairs = [["canny", input_image, 0.50],
-                #                     ["openpose", replaced_input_image, 0.50],
-                #                     ["color", input_image, 0.85]]
+                # controlnet_pairs = [["sdxl_canny_mid", input_image, 0.50]]
+                # first_diffusion_output_image = inpaint(input_image,
+                #                                        input_mask,
+                #                                        controlnet_pairs,
+                #                                        diffusion_steps=first_diffusion_steps,
+                #                                        cfg_scale=7,
+                #                                        denoising_strength=first_denoising_strength,
+                #                                        input_prompt=input_prompts[index],
+                #                                        hr_scale=1.0,
+                #                                        seed=seed,
+                #                                        sampler="DPM++ 2M SDE Karras",
+                #                                        loractl_flag=False,
+                #                                        sd_model_checkpoint=sd_model_checkpoint,
+                #                                        sd_lora_checkpoint=sd_lora_checkpoints[index])
+                controlnet_pairs = [["canny", input_image, 0.50],
+                                    ["openpose", replaced_input_image, 0.50],
+                                    ["color", input_image, 0.85]]
                 first_diffusion_output_image = inpaint(input_image,
                                                        input_mask,
                                                        controlnet_pairs,
                                                        diffusion_steps=first_diffusion_steps,
-                                                       cfg_scale=7,
                                                        denoising_strength=first_denoising_strength,
                                                        input_prompt=input_prompts[index],
                                                        hr_scale=1.0,
-                                                       seed=seed,
-                                                       sampler="DPM++ 2M SDE Karras",
-                                                       loractl_flag=False)
-                                                       # sd_model_checkpoint=sd_model_checkpoint,
-                                                       # sd_lora_checkpoint=sd_lora_checkpoints[index])
-
+                                                       seed=str(seed),
+                                                       sd_model_checkpoint=sd_model_checkpoint,
+                                                       sd_lora_checkpoint=sd_lora_checkpoints[index])
 
                 # TODO: 2024/2/1
                 if color_shift_middle:

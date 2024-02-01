@@ -649,11 +649,17 @@ def load_checkpoint_with_text_encoder_conversion(ckpt_path, device="cpu"):
     return checkpoint, state_dict
 
 
-def load_models_from_stable_diffusion_checkpoint(v2, ckpt_path, device="cpu", dtype=None, unet_use_linear_projection_in_v2=True):
+def load_models_from_stable_diffusion_checkpoint(v2,
+                                                 ckpt_path,
+                                                 device="cpu",
+                                                 dtype=None,
+                                                 unet_use_linear_projection_in_v2=True):
     _, state_dict = load_checkpoint_with_text_encoder_conversion(ckpt_path, device)
+    print("load_checkpoint_with_text_encoder_conversion: over")
 
     # Convert the UNet2DConditionModel model.
     unet_config = create_unet_diffusers_config(v2, unet_use_linear_projection_in_v2)
+    print("config: ", unet_config)
     converted_unet_checkpoint = convert_ldm_unet_checkpoint(v2, state_dict, unet_config)
 
     unet = UNet2DConditionModel(**unet_config).to(device)

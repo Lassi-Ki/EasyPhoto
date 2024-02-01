@@ -27,6 +27,7 @@ SCHEDULER_LINEAR_END = 0.0120
 SCHEDULER_TIMESTEPS = 1000
 SCHEDLER_SCHEDULE = "scaled_linear"
 
+
 def merge_lora(pipeline, lora_path, multiplier, from_safetensor=False, device='cpu', dtype=torch.float32):
     LORA_PREFIX_UNET = "lora_unet"
     LORA_PREFIX_TEXT_ENCODER = "lora_te"
@@ -91,6 +92,7 @@ def merge_lora(pipeline, lora_path, multiplier, from_safetensor=False, device='c
             curr_layer.weight.data += multiplier * alpha * torch.mm(weight_up, weight_down)
 
     return pipeline
+
 
 # TODO: Refactor with merge_lora.
 def unmerge_lora(pipeline, lora_path, multiplier=1, from_safetensor=False, device="cpu", dtype=torch.float32):
@@ -159,6 +161,7 @@ def unmerge_lora(pipeline, lora_path, multiplier=1, from_safetensor=False, devic
 
     return pipeline
 
+
 def t2i_sdxl_call(
     steps=20,
     seed=-1,
@@ -195,7 +198,89 @@ def t2i_sdxl_call(
     torch.cuda.empty_cache()
     return image
 
+
 def i2i_inpaint_call(
+        images=[],
+        mask_image=None,
+        denoising_strength=0.75,
+        controlnet_image=[],
+        controlnet_units_list=[],
+        controlnet_conditioning_scale=[],
+        steps=20,
+        seed=-1,
+
+        cfg_scale=7.0,
+        width=640,
+        height=768,
+
+        prompt="",
+        negative_prompt="",
+        sd_lora_checkpoint=[],
+        sd_model_checkpoint="",
+        sd_base15_checkpoint="",
+):
+    global tokenizer, scheduler, text_encoder, vae, unet, sd_model_checkpoint_before, pipeline
+    width = int(width // 8 * 8)
+    height = int(height // 8 * 8)
+
+    if (sd_model_checkpoint_before != sd_model_checkpoint) or (unet is None) or (vae is None) or (text_encoder is None):
+        sd_model_checkpoint_before = sd_model_checkpoint
+        print("load_models_from_stable_diffusion_checkpoint: start")
+        text_encoder, vae, unet = load_models_from_stable_diffusion_checkpoint(False, sd_model_checkpoint)
+        print("load_models_from_stable_diffusion_checkpoint: over")
+
+    # Load scheduler, tokenizer and models.
+    noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(sd_base15_checkpoint, subfolder="scheduler")
+    tokenizer = CLIPTokenizer.from_pretrained(
+        sd_base15_checkpoint, subfolder="tokenizer"
+    )
+
+    pipeline = StableDiffusionControlNetInpaintPipeline(
+        controlnet=controlnet_units_list,
+        unet=unet.to(weight_dtype),
+        text_encoder=text_encoder.to(weight_dtype),
+        vae=vae.to(weight_dtype),
+        scheduler=noise_scheduler,
+        tokenizer=tokenizer,
+        safety_checker=None,
+        feature_extractor=None,
+    ).to("cuda")
+    if preload_lora is not None:
+        for _preload_lora in preload_lora:
+            merge_lora(pipeline, _preload_lora, 0.60, from_safetensor=True, device="cuda", dtype=weight_dtype)
+    if len(sd_lora_checkpoint) != 0:
+        # Bind LoRANetwork to pipeline.
+        for _sd_lora_checkpoint in sd_lora_checkpoint:
+            merge_lora(pipeline, _sd_lora_checkpoint, 0.90, from_safetensor=True, device="cuda", dtype=weight_dtype)
+
+    try:
+        import xformers
+        pipeline.enable_xformers_memory_efficient_attention()
+    except:
+        logging.warning(
+            'No module named xformers. Infer without using xformers. You can run pip install xformers to install it.')
+
+    generator = torch.Generator("cuda").manual_seed(int(seed))
+    pipeline.safety_checker = None
+
+    image = pipeline(
+        prompt, image=images, mask_image=mask_image, control_image=controlnet_image, strength=denoising_strength,
+        negative_prompt=negative_prompt,
+        guidance_scale=cfg_scale, num_inference_steps=steps, generator=generator, height=height, width=width, \
+        controlnet_conditioning_scale=controlnet_conditioning_scale, guess_mode=True
+    ).images[0]
+
+    if len(sd_lora_checkpoint) != 0:
+        # Bind LoRANetwork to pipeline.
+        for _sd_lora_checkpoint in sd_lora_checkpoint:
+            unmerge_lora(pipeline, _sd_lora_checkpoint, 0.90, from_safetensor=True, device="cuda", dtype=weight_dtype)
+    if preload_lora is not None:
+        for _preload_lora in preload_lora:
+            unmerge_lora(pipeline, _preload_lora, 0.60, from_safetensor=True, device="cuda", dtype=weight_dtype)
+    return image
+
+
+def i2i_inpaint_call_old(
     images=[],
     mask_image=None,
     denoising_strength=0.75,
@@ -218,12 +303,14 @@ def i2i_inpaint_call(
     global tokenizer, scheduler, text_encoder, vae, unet, sd_model_checkpoint_before, pipeline
     width = int(width // 8 * 8)
     height = int(height // 8 * 8)
-    
+
+    print("load_models_from_stable_diffusion_checkpoint: start")
     if (sd_model_checkpoint_before != sd_model_checkpoint) \
             or (unet is None) \
             or (vae is None) \
             or (text_encoder is None):
         sd_model_checkpoint_before = sd_model_checkpoint
+        # TODO: 模型不匹配！！！！！
         text_encoder, vae, unet = load_models_from_stable_diffusion_checkpoint(False, sd_model_checkpoint)
     print("load_models_from_stable_diffusion_checkpoint: over")
 
