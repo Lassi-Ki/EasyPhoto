@@ -1,10 +1,8 @@
-
 import os
 import platform
 import subprocess
 import sys
 from glob import glob
-
 from easyphoto.easyphoto_config import (cache_log_file_path, models_path,
                                         user_id_outpath_samples,
                                         validation_prompt)
@@ -13,22 +11,31 @@ from easyphoto.easyphoto_utils import (check_files_exists_and_download,
 from easyphoto.train_kohya.utils.lora_utils import convert_lora_to_safetensors
 from PIL import Image, ImageOps
 
-python_executable_path = sys.executable
-check_hash             = True
 
-# Attention! Output of js is str or list, not float or int
+python_executable_path = sys.executable
+check_hash = True
+
+
 def easyphoto_train_forward(
     sd_model_checkpoint: str,
     id_task: str,
     user_id: str,
-    resolution: int, val_and_checkpointing_steps: int, max_train_steps: int, steps_per_photos: int,
-    train_batch_size: int, gradient_accumulation_steps: int, dataloader_num_workers: int, learning_rate: float, 
-    rank: int, network_alpha: int,
+    resolution: int,
+    val_and_checkpointing_steps: int,
+    max_train_steps: int,
+    steps_per_photos: int,
+    train_batch_size: int,
+    gradient_accumulation_steps: int,
+    dataloader_num_workers: int,
+    learning_rate: float,
+    rank: int,
+    network_alpha: int,
     validation: bool,
     instance_images: list,
     enable_rl: bool,
     max_rl_time: float,
     timestep_fraction: float,
+    # skin_retouching_bool: bool,
     *args
 ):  
     global check_hash
@@ -47,7 +54,11 @@ def easyphoto_train_forward(
     ids = sorted(ids)
 
     if user_id in ids:
-        return "User id 不能重复。"
+        return "User id non-repeatability."
+
+    if int(rank) < int(network_alpha):
+        return "The network alpha {} must not exceed rank {}. " "It will result in an unintended LoRA.".format(
+            network_alpha, rank)
 
     check_files_exists_and_download(check_hash)
     check_hash = False
