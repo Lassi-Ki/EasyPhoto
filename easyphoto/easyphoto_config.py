@@ -14,6 +14,7 @@ script_path = os.path.join(data_path, "javascript")
 # sample path
 easyphoto_outpath_samples = os.path.join(data_dir, 'outputs/easyphoto-outputs')
 user_id_outpath_samples = os.path.join(data_dir, 'outputs/easyphoto-user-id-infos')
+easyphoto_img2img_samples = os.path.join(data_dir, "outputs/img2img-images")
 
 # log path and lora path
 cache_log_file_path = os.path.join(models_path, "train_kohya_log.txt")

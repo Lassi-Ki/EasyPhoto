@@ -196,8 +196,8 @@ def t2i_sdxl_call(
     return image
 
 def i2i_inpaint_call(
-    images=[],  
-    mask_image=None,  
+    images=[],
+    mask_image=None,
     denoising_strength=0.75,
     controlnet_image=[],
     controlnet_units_list=[],
@@ -216,15 +216,20 @@ def i2i_inpaint_call(
     sd_base15_checkpoint="",
 ):  
     global tokenizer, scheduler, text_encoder, vae, unet, sd_model_checkpoint_before, pipeline
-    width   = int(width // 8 * 8)
-    height  = int(height // 8 * 8)
+    width = int(width // 8 * 8)
+    height = int(height // 8 * 8)
     
-    if (sd_model_checkpoint_before != sd_model_checkpoint) or (unet is None) or (vae is None) or (text_encoder is None):
+    if (sd_model_checkpoint_before != sd_model_checkpoint) \
+            or (unet is None) \
+            or (vae is None) \
+            or (text_encoder is None):
         sd_model_checkpoint_before = sd_model_checkpoint
         text_encoder, vae, unet = load_models_from_stable_diffusion_checkpoint(False, sd_model_checkpoint)
+    print("load_models_from_stable_diffusion_checkpoint: over")
 
     # Load scheduler, tokenizer and models.
-    noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(sd_base15_checkpoint, subfolder="scheduler")
+    noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(sd_base15_checkpoint,
+                                                                  subfolder="scheduler")
     tokenizer = CLIPTokenizer.from_pretrained(
         sd_base15_checkpoint, subfolder="tokenizer"
     )
@@ -251,15 +256,26 @@ def i2i_inpaint_call(
         import xformers
         pipeline.enable_xformers_memory_efficient_attention()
     except:
-        logging.warning('No module named xformers. Infer without using xformers. You can run pip install xformers to install it.')
+        logging.warning('No module named xformers. '
+                        'Infer without using xformers. You can run pip install xformers to install it.')
         
     generator           = torch.Generator("cuda").manual_seed(int(seed)) 
     pipeline.safety_checker = None
 
     image = pipeline(
-        prompt, image=images, mask_image=mask_image, control_image=controlnet_image, strength=denoising_strength, negative_prompt=negative_prompt, 
-        guidance_scale=cfg_scale, num_inference_steps=steps, generator=generator, height=height, width=width, \
-        controlnet_conditioning_scale=controlnet_conditioning_scale, guess_mode=True
+        prompt,
+        image=images,
+        mask_image=mask_image,
+        control_image=controlnet_image,
+        strength=denoising_strength,
+        negative_prompt=negative_prompt,
+        guidance_scale=cfg_scale,
+        num_inference_steps=steps,
+        generator=generator,
+        height=height,
+        width=width,
+        controlnet_conditioning_scale=controlnet_conditioning_scale,
+        guess_mode=True
     ).images[0]
 
     if len(sd_lora_checkpoint) != 0:
