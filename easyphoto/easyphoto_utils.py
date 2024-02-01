@@ -1,8 +1,12 @@
 import logging
 import os
+import random
 import time
 import hashlib
+
+import numpy as np
 import requests
+import re
 from modelscope import snapshot_download
 from easyphoto.easyphoto_config import data_path, models_path, script_path
 import easyphoto
@@ -163,6 +167,7 @@ def css_html():
 
     return head
 
+
 def unload_models():
     """Unload models to free VRAM."""
     easyphoto.easyphoto_infer.retinaface_detection = None
@@ -176,3 +181,74 @@ def unload_models():
     torch.cuda.empty_cache()
     torch.cuda.ipc_collect()
     return "Already Empty Cache of Preprocess Model in EasyPhoto"
+
+# download path
+controlnet_extensions_path = os.path.join(data_path, "extensions", "sd-webui-controlnet")
+controlnet_extensions_builtin_path = os.path.join(data_path, "extensions-builtin", "sd-webui-controlnet")
+if os.path.exists(controlnet_extensions_path):
+    controlnet_annotator_cache_path = os.path.join(controlnet_extensions_path, "annotator/downloads/openpose")
+    controlnet_cache_path = controlnet_extensions_path
+    controlnet_clip_annotator_cache_path = os.path.join(controlnet_extensions_path, "annotator/downloads/clip_vision")
+    controlnet_depth_annotator_cache_path = os.path.join(controlnet_extensions_path, "annotator/downloads/midas")
+
+
+def get_controlnet_version() -> str:
+    """Borrowed from sd-webui-controlnet/patch_version.py."""
+    version_file = "scripts/controlnet_version.py"
+    version_file_path = os.path.join(controlnet_extensions_path, version_file)
+    if not os.path.exists(version_file_path):
+        builtin_version_file_path = os.path.join(controlnet_extensions_builtin_path, version_file)
+        if not os.path.exists(builtin_version_file_path):
+            return "0.0.0"
+        else:
+            with open(builtin_version_file_path, "r") as f:
+                content = f.read()
+    else:
+        with open(version_file_path, "r") as f:
+            content = f.read()
+    version_pattern = r"version_flag\s*=\s*'v(\d+\.\d+\.\d+)'"
+    controlnet_version = re.search(version_pattern, content).group(1)
+
+    return controlnet_version
+
+
+def modelscope_models_to_gpu():
+    """Load models to cuda."""
+    ms_models = [
+        easyphoto.easyphoto_infer.retinaface_detection,
+        easyphoto.easyphoto_infer.image_face_fusion,
+        easyphoto.easyphoto_infer.skin_retouching,
+        easyphoto.easyphoto_infer.portrait_enhancement,
+        easyphoto.easyphoto_infer.face_skin,
+        easyphoto.easyphoto_infer.face_recognition,
+        easyphoto.easyphoto_infer.psgan_inference,
+    ]
+    for ms_model in ms_models:
+        if hasattr(ms_model, "__dict__"):
+            for key in ms_model.__dict__.keys():
+                try:
+                    if hasattr(getattr(ms_model, key), "cuda"):
+                        getattr(ms_model, key).cuda()
+                except Exception as e:
+                    logging.info(f"{str(ms_model)}.{key} has no cuda(), detailed error infor is {e}")
+
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.ipc_collect()
+
+
+def seed_everything(seed=11):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def reload_sd_model_vae(sd_model, vae):
+    """Reload sd model and vae"""
+    # TODO: 整合到当前代码中
+    sd_models.reload_model_weights()
+    sd_vae.reload_vae_weights()

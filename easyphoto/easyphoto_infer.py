@@ -17,7 +17,11 @@ from easyphoto.easyphoto_config import (DEFAULT_NEGATIVE, DEFAULT_NEGATIVE_XL,
                                         validation_prompt,
                                         easyphoto_img2img_samples)
 from easyphoto.easyphoto_utils import (check_files_exists_and_download,
-                                       check_id_valid, save_image)
+                                       check_id_valid, save_image,
+                                       get_controlnet_version,
+                                       modelscope_models_to_gpu,
+                                       seed_everything,
+                                       reload_sd_model_vae)
 from easyphoto.face_process_utils import (Face_Skin, call_face_crop,
                                           color_transfer, crop_and_paste)
 from easyphoto.sd_diffusers import (i2i_inpaint_call, t2i_sdxl_call,
@@ -28,6 +32,7 @@ from modelscope.pipelines import pipeline
 from modelscope.utils.constant import Tasks
 from PIL import Image
 from typing import Any, List, Union
+from psgan_utils import PSGAN_Inference
 
 def resize_image(input_image, resolution, nearest = False, crop264 = True):
     H, W, C = input_image.shape
@@ -86,37 +91,192 @@ def get_controlnet_preprocess(unit, input_image):
     return output_image
 
 
-def get_controlnet_unit(unit):
-    global model_canny, model_openpose, model_tile, model_color
+# Add control_mode=1 means Prompt is more important, to better control lips and eyes,
+# this comments will be delete after 10 PR and for those who are not familiar with SDWebUIControlNetAPI
+def get_controlnet_unit(
+    unit: str, input_image: Union[Any, List[Any]], weight: float, is_batch: bool = False, control_mode: int = 1
+):  # Any should be replaced with a more specific image type  # Default to False, assuming single image input by default
     if unit == "canny":
-        if model_canny is None:
-            model_canny = ControlNetModel.from_pretrained(
-                os.path.join(abs_models_path, "Others", "bubbliiiing/controlnet_helper/controlnet",
-                             "sd-controlnet-canny"), torch_dtype=weight_dtype)
-        return model_canny
+        control_unit = dict(
+            input_image=None,
+            module="canny",
+            weight=weight,
+            guidance_end=1,
+            control_mode=1,
+            resize_mode="Just Resize",
+            threshold_a=100,
+            threshold_b=200,
+            model="control_v11p_sd15_canny",
+        )
+
+    elif unit == "sdxl_canny_mid":
+        control_unit = dict(
+            input_image={"image": np.asarray(input_image), "mask": None},
+            module="canny",
+            weight=weight,
+            guidance_end=1,
+            control_mode=1,
+            processor_res=1024,
+            resize_mode="Just Resize",
+            threshold_a=100,
+            threshold_b=200,
+            model="diffusers_xl_canny_mid",
+        )
 
     elif unit == "openpose":
-        if model_openpose is None:
-            model_openpose = ControlNetModel.from_pretrained(
-                os.path.join(abs_models_path, "Others", "bubbliiiing/controlnet_helper/controlnet",
-                             "sd-controlnet-openpose"), torch_dtype=weight_dtype)
-        return model_openpose
+        control_unit = dict(
+            image=None,
+            module="openpose_full",
+            weight=weight,
+            guidance_end=1,
+            control_mode=1,
+            resize_mode="Just Resize",
+            model="control_v11p_sd15_openpose",
+        )
+
+    elif unit == "dwpose":
+        control_unit = dict(
+            image=None,
+            module="dw_openpose_full",
+            weight=weight,
+            guidance_end=1,
+            control_mode=1,
+            resize_mode="Just Resize",
+            model="control_v11p_sd15_openpose",
+        )
+
+    elif unit == "sdxl_openpose_lora":
+        control_unit = dict(
+            input_image={"image": np.asarray(input_image), "mask": None},
+            module="openpose_full",
+            weight=weight,
+            guidance_end=1,
+            control_mode=1,
+            processor_res=1024,
+            resize_mode="Just Resize",
+            model="thibaud_xl_openpose_256lora",
+        )
 
     elif unit == "color":
-        if model_color is None:
-            model_color = ControlNetModel.from_pretrained(
-                os.path.join(abs_models_path, "Others", "bubbliiiing/controlnet_helper/controlnet",
-                             "sd-controlnet-color"), torch_dtype=weight_dtype)
-        return model_color
+        control_unit = dict(
+            input_image=None,
+            module="none",
+            weight=weight,
+            guidance_end=1,
+            control_mode=1,
+            resize_mode="Just Resize",
+            model="control_sd15_random_color",
+        )
+
+        blur_ratio = 1
+        if is_batch:
+            new_input_image = []
+            for _input_image in input_image:
+                h, w, c = np.shape(_input_image)
+                color_image = np.array(_input_image, np.uint8)
+
+                color_image = resize_image(color_image, 1024)
+                now_h, now_w = color_image.shape[:2]
+
+                color_image = cv2.resize(color_image, (int(now_w // blur_ratio), int(now_h // blur_ratio)), interpolation=cv2.INTER_CUBIC)
+                color_image = cv2.resize(color_image, (now_w, now_h), interpolation=cv2.INTER_NEAREST)
+                color_image = cv2.resize(color_image, (w, h), interpolation=cv2.INTER_CUBIC)
+                color_image = Image.fromarray(np.uint8(color_image))
+                new_input_image.append(color_image)
+
+            control_unit["batch_images"] = [np.array(_input_image, np.uint8) for _input_image in new_input_image]
+        else:
+            h, w, c = np.shape(input_image)
+            color_image = np.array(input_image, np.uint8)
+
+            color_image = resize_image(color_image, 1024)
+            now_h, now_w = color_image.shape[:2]
+
+            color_image = cv2.resize(color_image, (int(now_w // blur_ratio), int(now_h // blur_ratio)), interpolation=cv2.INTER_CUBIC)
+            color_image = cv2.resize(color_image, (now_w, now_h), interpolation=cv2.INTER_NEAREST)
+            color_image = cv2.resize(color_image, (w, h), interpolation=cv2.INTER_CUBIC)
+            color_image = Image.fromarray(np.uint8(color_image))
+
+            control_unit["input_image"] = {"image": np.asarray(color_image), "mask": None}
 
     elif unit == "tile":
-        if model_tile is None:
-            model_tile = ControlNetModel.from_pretrained(
-                os.path.join(abs_models_path, "Others", "bubbliiiing/controlnet_helper/controlnet",
-                             "sd-controlnet-tile"), torch_dtype=weight_dtype)
-        return model_tile
+        control_unit = dict(
+            input_image=None,
+            module="tile_resample",
+            weight=weight,
+            guidance_end=1,
+            control_mode=1,
+            resize_mode="Just Resize",
+            threshold_a=1,
+            threshold_b=200,
+            model="control_v11f1e_sd15_tile",
+        )
 
-    return None
+    elif unit == "ipa_full_face":
+        control_unit = dict(
+            input_image=None,
+            module="ip-adapter_clip_sd15",
+            weight=weight,
+            guidance_end=1,
+            control_mode=1,
+            resize_mode="Just Resize",
+            model="ip-adapter-full-face_sd15",
+        )
+    elif unit == "ipa_sdxl_plus_face":
+        control_unit = dict(
+            input_image={"image": np.asarray(input_image), "mask": None},
+            module="ip-adapter_clip_sdxl_plus_vith",
+            weight=weight,
+            guidance_end=1,
+            control_mode=1,
+            resize_mode="Just Resize",
+            model="ip-adapter-plus-face_sdxl_vit-h",
+        )
+    elif unit == "depth":
+        control_unit = dict(
+            input_image=input_image,
+            module="depth_midas",
+            weight=weight,
+            guidance_end=1,
+            control_mode=control_mode,
+            resize_mode="Just Resize",
+            model="control_v11f1p_sd15_depth",
+        )
+
+    elif unit == "ipa":
+        control_unit = dict(
+            input_image=input_image,
+            module="ip-adapter_clip_sd15",
+            weight=weight,
+            guidance_end=1,
+            control_mode=control_mode,
+            resize_mode="Just Resize",
+            model="ip-adapter_sd15",
+        )
+
+    elif unit == "canny_no_pre":
+        control_unit = dict(
+            input_image=input_image,
+            module=None,
+            weight=weight,
+            guidance_end=1,
+            control_mode=control_mode,
+            resize_mode="Crop and Resize",
+            threshold_a=100,
+            threshold_b=200,
+            model="control_v11p_sd15_canny",
+        )
+
+    if unit != "color" and not unit.startswith("sdxl"):
+        if is_batch:
+            control_unit["batch_images"] = [np.array(_input_image, np.uint8) for _input_image in input_image]
+        else:
+            control_unit["input_image"] = {
+                "image": np.asarray(input_image),
+                "mask": None,
+            }
+
+    return control_unit
 
 
 def get_controlnet_unit_old(
@@ -372,140 +532,83 @@ def inpaint(
     seed: int = 123456,
     sd_lora_checkpoint=[],
     sd_model_checkpoint="Chilloutmix-Ni-pruned-fp16-fix.safetensors",
-):
-    assert input_image is not None, f'input_image must not be none'
-    controlnet_units_list = []
-    controlnet_image = []
-    controlnet_conditioning_scale = []
-    w = int(input_image.width)
-    h = int(input_image.height)
 
-    for index, pair in enumerate(controlnet_pairs):
-        controlnet_units_list.append(
-            get_controlnet_unit(pair[0])
-        )
-        controlnet_image.append(
-            get_controlnet_preprocess(pair[0], pair[1])
-        )
-        controlnet_conditioning_scale.append(
-            pair[2]
-        )
-
-    positive = f'{input_prompt}, {default_positive_prompt}'
-    negative = f'{default_negative_prompt}'
-
-    image = i2i_inpaint_call(
-        images=[input_image],
-        mask_image=select_mask_input,
-        denoising_strength=denoising_strength,
-
-        controlnet_units_list=controlnet_units_list,
-        controlnet_image=controlnet_image,
-        controlnet_conditioning_scale=controlnet_conditioning_scale,
-
-        steps=diffusion_steps,
-        seed=seed,
-
-        cfg_scale=7,
-        width=int(w*hr_scale),
-        height=int(h*hr_scale),
-
-        prompt=positive,
-        negative_prompt=negative,
-        sd_lora_checkpoint=sd_lora_checkpoint,
-        sd_model_checkpoint=sd_model_checkpoint,
-        sd_base15_checkpoint=os.path.join(models_path, "Others", "stable-diffusion-v1-5")
-    )
-
-    return image
-
-
-def inpaint_old(
-    input_image: Image.Image,
-    select_mask_input: Image.Image,
-    controlnet_pairs: list,
-    input_prompt = '1girl',
-    diffusion_steps = 50,
-    denoising_strength = 0.45,
     cfg_scale=7,
-    hr_scale: float = 1.0,
-    default_positive_prompt = DEFAULT_POSITIVE,
-    default_negative_prompt = DEFAULT_NEGATIVE,
-    seed: int = 123456,
-    sd_lora_checkpoint = [],
-    sd_model_checkpoint = "Chilloutmix-Ni-pruned-fp16-fix.safetensors",
+    sampler="DPM++ 2M SDE Karras",
+    outpath_samples=easyphoto_img2img_samples,
+    do_not_save_samples=False,
 ):
-    assert input_image is not None, f'input_image must not be none'
+    assert input_image is not None, f"input_image must not be none"
     controlnet_units_list = []
-    controlnet_image = []
-    controlnet_conditioning_scale = []
-    w = int(input_image.width)
-    h = int(input_image.height)
+    w = int(input_image.width) if type(input_image) is not list else int(input_image[0].width)
+    h = int(input_image.height) if type(input_image) is not list else int(input_image[0].height)
+
+    # controlnet_image = []
+    # controlnet_conditioning_scale = []
 
     for pair in controlnet_pairs:
-        if len(pair) == 4:
-            controlnet_units_list.append(
-                get_controlnet_unit(pair[0], pair[1], pair[2], False if type(pair[1]) is not list else True, pair[3])
-            )
-        else:
-            controlnet_units_list.append(get_controlnet_unit(pair[0], pair[1], pair[2], False if type(pair[1]) is not list else True))
+        controlnet_units_list.append(
+            get_controlnet_unit(pair[0], pair[1], pair[2], False if type(pair[1]) is not list else True))
 
-    # for index, pair in enumerate(controlnet_pairs):
-    #     controlnet_units_list.append(
-    #         get_controlnet_unit(pair[0])
-    #     )
-    #     controlnet_image.append(
-    #         get_controlnet_preprocess(pair[0], pair[1])
-    #     )
-    #     controlnet_conditioning_scale.append(
-    #         pair[2]
-    #     )
-
-    positive = f'{input_prompt}, {default_positive_prompt}'
-    negative = f'{default_negative_prompt}'
+    positive = f"{input_prompt}, {default_positive_prompt}"
+    negative = f"{default_negative_prompt}"
 
     image = i2i_inpaint_call(
-        images=[input_image],
+        images=[input_image] if type(input_image) is not list else input_image,
         mask_image=select_mask_input,
-        steps=diffusion_steps,
         denoising_strength=denoising_strength,
-        cfg_scale=cfg_scale,
-        width=int(w * hr_scale),
-        height=int(h * hr_scale),
+        # controlnet_units_list=controlnet_units_list,
+        # controlnet_image=controlnet_image,
+        # controlnet_conditioning_scale=controlnet_conditioning_scale,
+        steps=diffusion_steps,
         seed=seed,
-
-        controlnet_units_list=controlnet_units_list, 
-        controlnet_image=controlnet_image,
-        controlnet_conditioning_scale=controlnet_conditioning_scale,
-
+        cfg_scale=cfg_scale,
+        width=int(w*hr_scale),
+        height=int(h*hr_scale),
         prompt=positive,
         negative_prompt=negative,
-        sd_lora_checkpoint=sd_lora_checkpoint,
-        sd_model_checkpoint=sd_model_checkpoint,
-        # TODO: SD1.5 -> SDXL
-        sd_base15_checkpoint=os.path.join(models_path, "Others", "stable-diffusion-v1-5"),
+        # sd_lora_checkpoint=sd_lora_checkpoint,
+        # sd_model_checkpoint=sd_model_checkpoint,
+        # sd_base15_checkpoint=os.path.join(models_path, "Others", "stable-diffusion-v1-5"),
+        inpainting_fill=1,
+        inpainting_mask_invert=0,
+        inpaint_full_res=False,
+        subseed=seed,
+        controlnet_units=controlnet_units_list,
+        outpath_samples=outpath_samples,
+        do_not_save_samples=do_not_save_samples,
+        sampler=sampler,
     )
 
     return image
+
 
 retinaface_detection = None
 image_face_fusion = None
 skin_retouching = None
 portrait_enhancement = None
+old_super_resolution_method = None
 face_skin = None
 face_recognition = None
-check_hash = True
-
-old_super_resolution_method = None
 psgan_inference = None
+check_hash = {}
 sdxl_txt2img_flag = False
+
 
 def easyphoto_infer_forward(
     sd_model_checkpoint,
     selected_template_images,
     init_image,
     uploaded_template_images,
+    text_to_image_input_prompt,
+    text_to_image_width,
+    text_to_image_height,
+    t2i_control_way,
+    t2i_pose_template,
+    scene_id,
+    prompt_generate_sd_model_checkpoint,
     additional_prompt,
+    lora_weights,
     before_face_fusion_ratio,
     after_face_fusion_ratio,
     first_diffusion_steps,
@@ -519,20 +622,29 @@ def easyphoto_infer_forward(
     color_shift_middle,
     color_shift_last,
     super_resolution,
+    super_resolution_method,
+    super_resolution_ratio,
+    skin_retouching_bool,
     display_score,
     background_restore,
     background_restore_denoising_strength,
-    sd_xl_input_prompt,
-    sd_xl_resolution,
+    makeup_transfer,
+    makeup_transfer_ratio,
+    face_shape_match,
     tabs,
+    ipa_control,
+    ipa_weight,
+    ipa_image_path,
+    ref_mode_choose,
+    ipa_only_weight,
+    ipa_only_image_path,
+    lcm_accelerate,
+    enable_second_diffusion,
     *user_ids,
 ):
     # global
-    global retinaface_detection, image_face_fusion, skin_retouching, portrait_enhancement, face_skin, face_recognition, check_hash
-
-    # check & download weights of basemodel/controlnet+annotator/VAE/face_skin/buffalo/validation_template
-    # check_files_exists_and_download(check_hash)
-    # check_hash = False
+    global retinaface_detection, image_face_fusion, skin_retouching, portrait_enhancement, \
+        old_super_resolution_method, face_skin, face_recognition, psgan_inference, check_hash, sdxl_txt2img_flag
 
     # 使用SDXL底模
     sdxl_pipeline_flag = True
@@ -559,9 +671,29 @@ def easyphoto_infer_forward(
     if len(user_ids) == last_user_id_none_num:
         return "Please choose a user id.", [], []
 
-    # get random seed 
-    if int(seed) == -1:
-        seed = np.random.randint(0, 65536)
+    # check & download weights of others models
+    if sdxl_pipeline_flag:
+        check_files_exists_and_download(check_hash.get("sdxl", True), download_mode="sdxl")
+        check_hash["sdxl"] = False
+
+    # check the version of controlnets
+    controlnet_version = get_controlnet_version()
+    major, minor, patch = map(int, controlnet_version.split("."))
+    if major == 0 and minor == 0 and patch == 0:
+        logging.error("Please install sd-webui-controlnet from https://github.com/Mikubill/sd-webui-controlnet.")
+        return "Please install sd-webui-controlnet from https://github.com/Mikubill/sd-webui-controlnet.", [], []
+
+    # check the number of controlnets
+    max_control_net_unit_count = 3
+    control_net_unit_count = 3
+    logging.info("ControlNet unit number: {}".format(control_net_unit_count))
+    if control_net_unit_count < max_control_net_unit_count:
+        error_info = (
+            "Please go to Settings/ControlNet and at least set {} for "
+            "Multi-ControlNet: ControlNet unit number (requires restart).".format(max_control_net_unit_count)
+        )
+        logging.error(error_info)
+        return error_info, [], []
 
     try:
         # choose tabs select
@@ -611,6 +743,29 @@ def easyphoto_infer_forward(
                                     model='bubbliiiing/cv_retinafce_recognition',
                                     model_revision='v1.0.3')
 
+    # psgan for transfer makeup 妆容迁移
+    if makeup_transfer and psgan_inference is None:
+        try:
+            makeup_transfer_model_path = os.path.join(models_path, "makeup_transfer.pth")
+            face_landmarks_model_path = os.path.join(models_path, "face_landmarks.pth")
+            psgan_inference = PSGAN_Inference(
+                "cuda", makeup_transfer_model_path, retinaface_detection, face_skin, face_landmarks_model_path
+            )
+        except Exception as e:
+            torch.cuda.empty_cache()
+            logging.error(f"MakeUp Transfer model load error. Error Info: {e}")
+
+    # This is to increase the fault tolerance of the code.
+    # If the code exits abnormally, it may cause the model to not function properly on the CPU
+    modelscope_models_to_gpu()
+
+    # get random seed
+    if int(seed) == -1:
+        seed = np.random.randint(0, 65536)
+
+    seed_everything(int(seed))
+
+    sd_lora_checkpoints = []
     # params init
     input_prompts = []
     face_id_images = []
@@ -618,7 +773,6 @@ def easyphoto_infer_forward(
     face_id_retinaface_boxes = []
     face_id_retinaface_keypoints = []
     face_id_retinaface_masks = []
-    sd_lora_checkpoints = []
     input_prompt_without_lora = additional_prompt
     multi_user_facecrop_ratio = 1.5
     multi_user_safecrop_ratio = 1.0
@@ -627,13 +781,12 @@ def easyphoto_infer_forward(
     need_mouth_fix = True
     input_mask_face_part_only = True
 
-    sd_model_checkpoint = os.path.join(models_path, f"Others/stable-diffusion-xl/{sd_model_checkpoint}")
-    sd_xl_model_checkpoint = os.path.join(models_path, f"Others/stable-diffusion-xl/{SDXL_MODEL_NAME}")
+    # sd_model_checkpoint = os.path.join(models_path, f"Others/stable-diffusion-xl/{sd_model_checkpoint}")
+    # sd_xl_model_checkpoint = os.path.join(models_path, f"Others/stable-diffusion-xl/{SDXL_MODEL_NAME}")
 
     logging.info("Start templates and user_ids preprocess.")
 
-    # TODO: 是否有替代方案?
-    # reload_sd_model_vae(sd_model_checkpoint, "madebyollin-sdxl-vae-fp16-fix.safetensors")
+    reload_sd_model_vae(sd_model_checkpoint, "madebyollin-sdxl-vae-fp16-fix.safetensors")
 
     for user_id in user_ids:
         if user_id == 'none':
@@ -647,6 +800,8 @@ def easyphoto_infer_forward(
         else:
             # get prompt
             input_prompt = f"{validation_prompt}, <lora:{user_id}>, " + additional_prompt
+
+            lora_model_path = os.path.join(models_path, "Lora")
             
             # get best image after training
             best_outputs_paths = glob.glob(os.path.join(user_id_outpath_samples, user_id,
@@ -662,15 +817,14 @@ def easyphoto_infer_forward(
                                            user_id,
                                            "ref_image.jpg")
 
-            # TODO
-            sd_lora_checkpoint = [os.path.join(user_id_outpath_samples,
-                                               user_id,
-                                               "user_weights",
-                                               "pytorch_lora_weights.safetensors")]
-            print("sd_lora_checkpoint: ", sd_lora_checkpoint)
-
             face_id_image = Image.open(face_id_image_path).convert("RGB")
             roop_image = Image.open(roop_image_path).convert("RGB")
+
+            # sd_lora_checkpoint = [os.path.join(user_id_outpath_samples,
+            #                                    user_id,
+            #                                    "user_weights",
+            #                                    "pytorch_lora_weights.safetensors")]
+            # print("sd_lora_checkpoint: ", sd_lora_checkpoint)
 
             # Crop user images to obtain portrait boxes, facial keypoints, and masks
             _face_id_retinaface_boxes, _face_id_retinaface_keypoints, _face_id_retinaface_masks \
@@ -685,23 +839,22 @@ def easyphoto_infer_forward(
             face_id_retinaface_boxes.append(_face_id_retinaface_box)
             face_id_retinaface_keypoints.append(_face_id_retinaface_keypoint)
             face_id_retinaface_masks.append(_face_id_retinaface_mask)
-            sd_lora_checkpoints.append(sd_lora_checkpoint)
+            # sd_lora_checkpoints.append(sd_lora_checkpoint)
 
-    if tabs == 3:
-        logging.info(sd_xl_input_prompt)
-        sd_xl_resolution = eval(str(sd_xl_resolution))
-        template_images = sdxl_txt2img(
-            input_prompt = sd_xl_input_prompt, \
-            diffusion_steps=30, width=sd_xl_resolution[1], height=sd_xl_resolution[0], \
-            default_positive_prompt=DEFAULT_POSITIVE_XL, \
-            default_negative_prompt=DEFAULT_NEGATIVE_XL, \
-            seed=seed, sd_model_checkpoint=sd_xl_model_checkpoint, 
-        )
-        template_images = [np.uint8(template_images)]
+    # if tabs == 3:
+    #     logging.info(sd_xl_input_prompt)
+    #     sd_xl_resolution = eval(str(sd_xl_resolution))
+    #     template_images = sdxl_txt2img(
+    #         input_prompt = sd_xl_input_prompt, \
+    #         diffusion_steps=30, width=sd_xl_resolution[1], height=sd_xl_resolution[0], \
+    #         default_positive_prompt=DEFAULT_POSITIVE_XL, \
+    #         default_negative_prompt=DEFAULT_NEGATIVE_XL, \
+    #         seed=seed, sd_model_checkpoint=sd_xl_model_checkpoint,
+    #     )
+    #     template_images = [np.uint8(template_images)]
 
     outputs, face_id_outputs = [], []
     loop_message = ""
-    # TODO: 是否为一次性推理 n 张图片的模式 ?
     for template_idx, template_image in enumerate(template_images):
         template_idx_info = f'''
             Start Generate template                 : {str(template_idx + 1)};
@@ -725,6 +878,11 @@ def easyphoto_infer_forward(
             background_restore                      : {str(background_restore)}
             background_restore_denoising_strength   : {str(background_restore_denoising_strength)}
             
+            makeup_transfer                         : {str(makeup_transfer)}
+            makeup_transfer_ratio                   : {str(makeup_transfer_ratio)}
+            skin_retouching_bool                    : {str(skin_retouching_bool)}
+            face_shape_match                        : {str(face_shape_match)}
+            ref_mode_choose                         : {str(ref_mode_choose)}
         '''
         logging.info(template_idx_info)
         try:
@@ -960,6 +1118,71 @@ def easyphoto_infer_forward(
                                                        seed=str(seed),
                                                        sd_model_checkpoint=sd_model_checkpoint,
                                                        sd_lora_checkpoint=sd_lora_checkpoints[index])
+                if not face_shape_match:
+                    if not sdxl_pipeline_flag:
+                        controlnet_pairs = [
+                            ["canny", input_image, 0.50],
+                            ["openpose", replaced_input_image, 0.50],
+                            ["color", input_image, 0.85],
+                        ]
+                    else:
+                        controlnet_pairs = [["sdxl_canny_mid", input_image, 0.50]]
+                    first_diffusion_output_image = inpaint(
+                        input_image,
+                        input_mask,
+                        controlnet_pairs,
+                        diffusion_steps=first_diffusion_steps,
+                        cfg_scale=7 if not lcm_accelerate else 2,
+                        denoising_strength=first_denoising_strength,
+                        input_prompt=input_prompts[index],
+                        hr_scale=1.0,
+                        seed=seed,
+                        sampler="DPM++ 2M SDE Karras" if not lcm_accelerate else "Euler a",
+                        loractl_flag=False,
+                    )
+                    # We only save the lora weight image in the first diffusion.
+                    first_diffusion_output_image = first_diffusion_output_image[0]
+                else:
+                    if not sdxl_pipeline_flag:
+                        controlnet_pairs = [["canny", input_image, 0.50], ["openpose", replaced_input_image, 0.50]]
+                    else:
+                        controlnet_pairs = [["sdxl_canny_mid", input_image, 0.50]]
+                    first_diffusion_output_image = inpaint(
+                        input_image,
+                        None,
+                        controlnet_pairs,
+                        diffusion_steps=first_diffusion_steps,
+                        cfg_scale=7,
+                        denoising_strength=first_denoising_strength,
+                        input_prompt=input_prompts[index],
+                        hr_scale=1.0,
+                        seed=seed,
+                        sampler="DPM++ 2M SDE Karras",
+                    )
+                    first_diffusion_output_image = first_diffusion_output_image[0]
+
+                    # detect face area
+                    face_skin_mask = face_skin(first_diffusion_output_image,
+                                               retinaface_detection,
+                                               needs_index=[[1, 2, 3, 4, 5, 7, 8, 10, 11, 12, 13]])[0]
+                    kernel_size = np.ones((int(face_width // 10), int(face_width // 10)), np.uint8)
+
+                    # Fill small holes with a close operation
+                    face_skin_mask = Image.fromarray(np.uint8(
+                        cv2.morphologyEx(np.array(face_skin_mask), cv2.MORPH_CLOSE, kernel_size)))
+
+                    # Use dilate to reconstruct the surrounding area of the face
+                    face_skin_mask = Image.fromarray(np.uint8(
+                        cv2.dilate(np.array(face_skin_mask), kernel_size, iterations=1)))
+                    face_skin_mask = cv2.blur(np.float32(face_skin_mask), (32, 32)) / 255
+
+                    # paste back to photo, Using I2I generation controlled solely by OpenPose,
+                    # even with a very small denoise amplitude,
+                    # still carries the risk of introducing NSFW and global incoherence.!!! important!!!
+                    input_image_uint8 = np.array(first_diffusion_output_image) * \
+                                        face_skin_mask + np.array(input_image) * \
+                                        (1 - face_skin_mask)
+                    first_diffusion_output_image = Image.fromarray(np.uint8(input_image_uint8))
 
                 # TODO: 2024/2/1
                 if color_shift_middle:
